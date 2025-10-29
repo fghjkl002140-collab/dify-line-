@@ -35,15 +35,27 @@ async function sendToDify(message, userId) {
       headers: {
         'Authorization': `Bearer ${process.env.DIFY_API_KEY}`,
         'Content-Type': 'application/json',
+        'Accept': 'text/event-stream', // SSE形式のレスポンスを要求
       },
       responseType: 'stream', // ストリーミングレスポンスを受け取る
+      timeout: 60000, // 60秒のタイムアウト
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
     });
 
     // ストリーミングレスポンスを処理
     let fullAnswer = '';
     let eventData = '';
+    let isDone = false;
     
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
+      const tryResolve = () => {
+        if (!isDone) {
+          isDone = true;
+          resolve(fullAnswer || '申し訳ございませんが、応答を生成できませんでした。');
+        }
+      };
+
       response.data.on('data', (chunk) => {
         eventData += chunk.toString();
         
@@ -53,10 +65,23 @@ async function sendToDify(message, userId) {
         
         for (const line of lines) {
           if (line.startsWith('data: ')) {
+            const payload = line.slice(6).trim();
+            
+            // [DONE] イベントで終了
+            if (payload === '[DONE]') {
+              tryResolve();
+              return;
+            }
+            
             try {
-              const data = JSON.parse(line.slice(6));
+              const data = JSON.parse(payload);
               if (data.answer) {
                 fullAnswer = data.answer;
+              }
+              // event: message_end で終了
+              if (data.event === 'message_end') {
+                tryResolve();
+                return;
               }
             } catch (e) {
               // JSON解析エラーは無視
@@ -68,21 +93,25 @@ async function sendToDify(message, userId) {
       response.data.on('end', () => {
         // 最後の不完全な行も処理
         if (eventData.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(eventData.slice(6));
-            if (data.answer) {
-              fullAnswer = data.answer;
+          const payload = eventData.slice(6).trim();
+          if (payload !== '[DONE]') {
+            try {
+              const data = JSON.parse(payload);
+              if (data.answer) {
+                fullAnswer = data.answer;
+              }
+            } catch (e) {
+              // JSON解析エラーは無視
             }
-          } catch (e) {
-            // JSON解析エラーは無視
           }
         }
-        
-        resolve(fullAnswer || '申し訳ございませんが、応答を生成できませんでした。');
+        tryResolve();
       });
 
       response.data.on('error', (error) => {
-        reject(error);
+        console.error('ストリームエラー:', error.message);
+        // エラーが発生しても、取得できた内容があれば返す
+        tryResolve();
       });
     });
   } catch (error) {
