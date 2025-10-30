@@ -1,7 +1,8 @@
-cexpress = require('express');
+const express = require('express');
 const line = require('@line/bot-sdk');
 const axios = require('axios');
 const cors = require('cors');
+const https = require('https');
 require('dotenv').config();
 
 const app = express();
@@ -25,6 +26,12 @@ app.use(express.urlencoded({ extended: true }));
 // Dify APIとの連携関数
 async function sendToDify(message, userId) {
   try {
+    // HTTPS接続の設定（SSL/TLSエラーを回避）
+    const httpsAgent = new https.Agent({
+      rejectUnauthorized: true,
+      keepAlive: true,
+    });
+
     // エージェントチャットアプリの場合は streaming モードを使用
     const response = await axios.post(process.env.DIFY_API_URL, {
       inputs: {},
@@ -41,6 +48,7 @@ async function sendToDify(message, userId) {
       timeout: 60000, // 60秒のタイムアウト
       maxBodyLength: Infinity,
       maxContentLength: Infinity,
+      httpsAgent: httpsAgent, // HTTPSエージェントを設定
     });
 
     // ストリーミングレスポンスを処理
