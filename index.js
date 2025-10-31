@@ -26,14 +26,27 @@ app.use(express.urlencoded({ extended: true }));
 // Dify APIとの連携関数
 async function sendToDify(message, userId) {
   try {
+    // エラーレスポンス（stream）を文字列化するユーティリティ
+    const streamToString = (readable) => new Promise((resolve, reject) => {
+      let data = '';
+      readable.setEncoding('utf8');
+      readable.on('data', (chunk) => { data += chunk; });
+      readable.on('end', () => resolve(data));
+      readable.on('error', reject);
+    });
+
     // HTTPS接続の設定（SSL/TLSエラーを回避）
     const httpsAgent = new https.Agent({
       rejectUnauthorized: true,
       keepAlive: true,
     });
 
+    // Dify API URL（ベースURLが渡された場合は /chat-messages を補完）
+    const baseUrl = (process.env.DIFY_API_URL || '').replace(/\/+$/, '');
+    const difyUrl = baseUrl.endsWith('/chat-messages') ? baseUrl : `${baseUrl}/chat-messages`;
+
     // エージェントチャットアプリの場合は streaming モードを使用
-    const response = await axios.post(process.env.DIFY_API_URL, {
+    const response = await axios.post(difyUrl, {
       inputs: {},
       query: message,
       response_mode: 'streaming',
@@ -123,7 +136,22 @@ async function sendToDify(message, userId) {
       });
     });
   } catch (error) {
-    console.error('Dify API エラー:', error.response?.data || error.message);
+    try {
+      if (error.response?.data && typeof error.response.data.on === 'function') {
+        const body = await (new Promise((resolve, reject) => {
+          let text = '';
+          error.response.data.setEncoding('utf8');
+          error.response.data.on('data', (c) => { text += c; });
+          error.response.data.on('end', () => resolve(text));
+          error.response.data.on('error', reject);
+        }));
+        console.error('Dify API エラー詳細:', body);
+      } else {
+        console.error('Dify API エラー:', error.message || error);
+      }
+    } catch (e) {
+      console.error('Dify API エラー（ログ取得失敗）:', error.message || error);
+    }
     return 'エラーが発生しました。しばらく時間をおいてから再度お試しください。';
   }
 }
